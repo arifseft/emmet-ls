@@ -30,7 +30,6 @@ let documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 
 let hasConfigurationCapability: boolean = false;
 let hasWorkspaceFolderCapability: boolean = false;
-let hasDiagnosticRelatedInformationCapability: boolean = false;
 
 connection.onInitialize((params: InitializeParams) => {
   let capabilities = params.capabilities;
@@ -42,11 +41,6 @@ connection.onInitialize((params: InitializeParams) => {
   );
   hasWorkspaceFolderCapability = !!(
     capabilities.workspace && !!capabilities.workspace.workspaceFolders
-  );
-  hasDiagnosticRelatedInformationCapability = !!(
-    capabilities.textDocument &&
-    capabilities.textDocument.publishDiagnostics &&
-    capabilities.textDocument.publishDiagnostics.relatedInformation
   );
 
   const result: InitializeResult = {
@@ -83,39 +77,6 @@ connection.onInitialized(() => {
   }
 });
 
-// The example settings
-interface ExampleSettings {
-  maxNumberOfProblems: number;
-}
-
-// The global settings, used when the `workspace/configuration` request is not supported by the client.
-// Please note that this is not the case when using this server with the client provided in this example
-// but could happen with other clients.
-const defaultSettings: ExampleSettings = { maxNumberOfProblems: 1000 };
-let globalSettings: ExampleSettings = defaultSettings;
-
-// Cache the settings of all open documents
-let documentSettings: Map<string, Thenable<ExampleSettings>> = new Map();
-
-function getDocumentSettings(resource: string): Thenable<ExampleSettings> {
-  if (!hasConfigurationCapability) {
-    return Promise.resolve(globalSettings);
-  }
-  let result = documentSettings.get(resource);
-  if (!result) {
-    result = connection.workspace.getConfiguration({
-      scopeUri: resource,
-      section: 'languageServerExample',
-    });
-    documentSettings.set(resource, result);
-  }
-  return result;
-}
-
-documents.onDidClose((e) => {
-  documentSettings.delete(e.document.uri);
-});
-
 connection.onCompletionResolve(
   (item: CompletionItem): CompletionItem => {
     item.insertTextFormat = InsertTextFormat.Snippet;
@@ -144,27 +105,18 @@ connection.onCompletion(
       let left = extractPosition.start;
       let right = extractPosition.start;
       let abbreviation = extractPosition.abbreviation;
-      let textResult = '';
-      if (languageId === 'html') {
-        const htmlconfig = resolveConfig({
-          options: {
-            'output.field': (index, placeholder) =>
-              ` \$\{${index}${placeholder ? ':' + placeholder : ''}\} `,
-          },
-        });
-        const markup = parseMarkup(abbreviation, htmlconfig);
-        textResult = stringifyMarkup(markup, htmlconfig);
-      } else {
-        const cssConfig = resolveConfig({
-          type: 'stylesheet',
-          options: {
-            'output.field': (index, placeholder) =>
-              ` \$\{${index}${placeholder ? ':' + placeholder : ''}\} `,
-          },
-        });
-        const markup = parseStylesheet(abbreviation, cssConfig);
-        textResult = stringifyStylesheet(markup, cssConfig);
-      }
+      let config = resolveConfig({
+        type: languageId != 'css' ? 'markup' : 'stylesheet',
+        options: {
+          'output.field': (index: number, placeholder: string) =>
+            `\$\{${index}${placeholder ? ':' + placeholder : ''}\}`,
+      },
+      });
+
+      let textResult = languageId != 'css'
+        ? stringifyMarkup(parseMarkup(abbreviation, config), config)
+        : stringifyStylesheet(parseStylesheet(abbreviation, config), config);
+
       const range = {
         start: {
           line: linenr,
@@ -184,7 +136,6 @@ connection.onCompletion(
           textEdit: {
             range,
             newText  : textResult,
-            // newText: textResult.replace(/\$\{\d*\}/g,''),
           },
           kind: CompletionItemKind.Snippet,
           data: {
